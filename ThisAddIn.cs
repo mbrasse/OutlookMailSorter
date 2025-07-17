@@ -5,6 +5,7 @@ using System.Text;
 using System.Xml.Linq;
 using Outlook = Microsoft.Office.Interop.Outlook;
 using Office = Microsoft.Office.Core;
+using System.Windows.Forms;
 
 namespace OutlookMailSorter
 {
@@ -12,6 +13,7 @@ namespace OutlookMailSorter
     {
         private void ThisAddIn_Startup(object sender, System.EventArgs e)
         {
+          MessageBox.Show("Good morning", "OutlookMailSorter");
         }
 
         private void ThisAddIn_Shutdown(object sender, System.EventArgs e)

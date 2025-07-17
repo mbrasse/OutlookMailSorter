@@ -1,9 +1,9 @@
 {
   "Version": 1,
-  "WorkspaceRootPath": "C:\\Users\\MichaelBrasse\\source\\repos\\registration-form-app\\OutlookMailSorter\\",
+  "WorkspaceRootPath": "C:\\Users\\MichaelBrasse\\source\\repos\\OutlookMailSorter\\",
   "Documents": [
     {
-      "AbsoluteMoniker": "D:0:0:{4E58F4AB-F992-432E-82E6-1ADD899E58A7}|OutlookMailSorter.csproj|c:\\users\\michaelbrasse\\source\\repos\\registration-form-app\\outlookmailsorter\\thisaddin.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "AbsoluteMoniker": "D:0:0:{4E58F4AB-F992-432E-82E6-1ADD899E58A7}|OutlookMailSorter.csproj|c:\\users\\michaelbrasse\\source\\repos\\outlookmailsorter\\thisaddin.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
       "RelativeMoniker": "D:0:0:{4E58F4AB-F992-432E-82E6-1ADD899E58A7}|OutlookMailSorter.csproj|solutionrelative:thisaddin.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
     }
   ],
@@ -14,8 +14,12 @@
       "DocumentGroups": [
         {
           "DockedWidth": 200,
-          "SelectedChildIndex": 1,
+          "SelectedChildIndex": 2,
           "Children": [
+            {
+              "$type": "Bookmark",
+              "Name": "ST:128:0:{75188d03-9892-4ae2-abf1-207126247ce5}"
+            },
             {
               "$type": "Bookmark",
               "Name": "ST:0:0:{1c4feeaa-4718-4aa9-859d-94ce25d182ba}"
@@ -24,13 +28,13 @@
               "$type": "Document",
               "DocumentIndex": 0,
               "Title": "ThisAddIn.cs",
-              "DocumentMoniker": "C:\\Users\\MichaelBrasse\\source\\repos\\registration-form-app\\OutlookMailSorter\\ThisAddIn.cs",
+              "DocumentMoniker": "C:\\Users\\MichaelBrasse\\source\\repos\\OutlookMailSorter\\ThisAddIn.cs",
               "RelativeDocumentMoniker": "ThisAddIn.cs",
-              "ToolTip": "C:\\Users\\MichaelBrasse\\source\\repos\\registration-form-app\\OutlookMailSorter\\ThisAddIn.cs",
+              "ToolTip": "C:\\Users\\MichaelBrasse\\source\\repos\\OutlookMailSorter\\ThisAddIn.cs",
               "RelativeToolTip": "ThisAddIn.cs",
-              "ViewState": "AgIAAAAAAAAAAAAAAAAAAA0AAAAJAAAAAAAAAA==",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
-              "WhenOpened": "2025-07-17T21:01:59.561Z",
+              "WhenOpened": "2025-07-17T21:48:36.888Z",
               "EditorCaption": ""
             }
           ]
