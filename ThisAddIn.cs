@@ -1,3 +1,4 @@
+// Merge branch safe-startup-thisaddin into main: apply safer startup changes.
 using System;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -48,16 +49,33 @@ namespace OutlookMailSorter
 
                 Logger.Log("ThisAddIn_Startup: event subscriptions completed.");
 
-                // PER YOUR REQUEST: Keep the MessageBox for now.
-                // WARNING: This is blocking on the Outlook UI thread. Consider removing or replacing later.
+                // SAFE STARTUP: avoid blocking UI with MessageBox.Show on startup.
+                // Instead, log and set a non-blocking status message in Outlook (if possible).
                 try
                 {
-                    MessageBox.Show("Good night", "OutlookMailSorter", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    Logger.Log("ThisAddIn_Startup: setting non-blocking status message instead of MessageBox.");
+                    var explorer = this.Application.ActiveExplorer();
+                    if (explorer != null)
+                    {
+                        try
+                        {
+                            explorer.StatusBar = "OutlookMailSorter: Ready";
+                        }
+                        catch (Exception ex)
+                        {
+                            // If setting the status bar fails, log but do not throw.
+                            Logger.Log($"ThisAddIn_Startup: failed to set StatusBar: {ex}");
+                        }
+                    }
+                    else
+                    {
+                        Logger.Log("ThisAddIn_Startup: ActiveExplorer is null; skipping StatusBar update.");
+                    }
                 }
                 catch (Exception ex)
                 {
-                    // Protect startup from MessageBox exceptions (rare) and log instead of throwing.
-                    Logger.Log($"ThisAddIn_Startup: MessageBox.Show threw an exception: {ex}");
+                    // Protect startup from unexpected exceptions and log instead of throwing.
+                    Logger.Log($"ThisAddIn_Startup: non-blocking status update threw an exception: {ex}");
                 }
             }
             catch (Exception ex)
@@ -226,6 +244,19 @@ namespace OutlookMailSorter
                         Directory.CreateDirectory(folder);
                         _logFilePath = Path.Combine(folder, "logs.txt");
 
+                        // Ensure the log file exists and write initial entry.
+                        try
+                        {
+                            if (!File.Exists(_logFilePath))
+                            {
+                                File.WriteAllText(_logFilePath, string.Empty);
+                            }
+                        }
+                        catch
+                        {
+                            // If we cannot create the file, proceed with _logFilePath set; Log will handle failures.
+                        }
+
                         // Note: for production you may want to rotate or limit log size.
                         Log("Logger initialized.");
                     }
@@ -246,7 +277,7 @@ namespace OutlookMailSorter
                 try
                 {
                     var ts = DateTime.UtcNow.ToString("o");
-                    var line = $"{ts}{message}{Environment.NewLine}";
+                    var line = $"{ts} {message}{Environment.NewLine}";
 
                     lock (_sync)
                     {
