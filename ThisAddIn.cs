@@ -1,4 +1,3 @@
-// Merge branch safe-startup-thisaddin into main: apply safer startup changes.
 using System;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -49,33 +48,58 @@ namespace OutlookMailSorter
 
                 Logger.Log("ThisAddIn_Startup: event subscriptions completed.");
 
-                // SAFE STARTUP: avoid blocking UI with MessageBox.Show on startup.
-                // Instead, log and set a non-blocking status message in Outlook (if possible).
+                // Read commit info from COMMIT_INFO.txt (created at commit time). Fallback to current UTC if missing.
+                string commitTimestamp = null;
                 try
                 {
-                    Logger.Log("ThisAddIn_Startup: setting non-blocking status message instead of MessageBox.");
-                    var explorer = this.Application.ActiveExplorer();
-                    if (explorer != null)
+                    string candidate = null;
+                    // Try common locations relative to the assembly base directory.
+                    var repoProbe = AppDomain.CurrentDomain.BaseDirectory;
+
+                    // Candidate at base dir
+                    candidate = Path.Combine(repoProbe, "COMMIT_INFO.txt");
+
+                    // Also try parent directories up to two levels (bin/Debug or bin/Release scenarios)
+                    var parent = Directory.GetParent(repoProbe);
+                    if ((candidate == null || !File.Exists(candidate)) && parent != null)
                     {
-                        try
-                        {
-                            explorer.StatusBar = "OutlookMailSorter: Ready";
-                        }
-                        catch (Exception ex)
-                        {
-                            // If setting the status bar fails, log but do not throw.
-                            Logger.Log($"ThisAddIn_Startup: failed to set StatusBar: {ex}");
-                        }
+                        var alt = Path.Combine(parent.FullName, "COMMIT_INFO.txt");
+                        if (File.Exists(alt)) candidate = alt;
                     }
-                    else
+
+                    if ((candidate == null || !File.Exists(candidate)) && parent != null && parent.Parent != null)
                     {
-                        Logger.Log("ThisAddIn_Startup: ActiveExplorer is null; skipping StatusBar update.");
+                        var alt2 = Path.Combine(parent.Parent.FullName, "COMMIT_INFO.txt");
+                        if (File.Exists(alt2)) candidate = alt2;
+                    }
+
+                    if (!string.IsNullOrEmpty(candidate) && File.Exists(candidate))
+                    {
+                        commitTimestamp = File.ReadAllText(candidate).Trim();
                     }
                 }
                 catch (Exception ex)
                 {
-                    // Protect startup from unexpected exceptions and log instead of throwing.
-                    Logger.Log($"ThisAddIn_Startup: non-blocking status update threw an exception: {ex}");
+                    Logger.Log($"ThisAddIn_Startup: failed reading COMMIT_INFO.txt: {ex}");
+                    commitTimestamp = null;
+                }
+
+                if (string.IsNullOrEmpty(commitTimestamp))
+                {
+                    commitTimestamp = DateTime.UtcNow.ToString("o") + " (UTC)"; // fallback
+                }
+
+                // PER YOUR REQUEST: Keep the MessageBox but update its text to include commit timestamp.
+                // WARNING: This is blocking on the Outlook UI thread. Consider removing or replacing later.
+                try
+                {
+                    var message = $"OutlookMailSorter initialized.\nLatest commit timestamp: {commitTimestamp}";
+                    MessageBox.Show(message, "OutlookMailSorter", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                catch (Exception ex)
+                {
+                    // Protect startup from MessageBox exceptions (rare) and log instead of throwing.
+                    Logger.Log($"ThisAddIn_Startup: MessageBox.Show threw an exception: {ex}");
                 }
             }
             catch (Exception ex)
@@ -244,19 +268,6 @@ namespace OutlookMailSorter
                         Directory.CreateDirectory(folder);
                         _logFilePath = Path.Combine(folder, "logs.txt");
 
-                        // Ensure the log file exists and write initial entry.
-                        try
-                        {
-                            if (!File.Exists(_logFilePath))
-                            {
-                                File.WriteAllText(_logFilePath, string.Empty);
-                            }
-                        }
-                        catch
-                        {
-                            // If we cannot create the file, proceed with _logFilePath set; Log will handle failures.
-                        }
-
                         // Note: for production you may want to rotate or limit log size.
                         Log("Logger initialized.");
                     }
@@ -277,7 +288,7 @@ namespace OutlookMailSorter
                 try
                 {
                     var ts = DateTime.UtcNow.ToString("o");
-                    var line = $"{ts} {message}{Environment.NewLine}";
+                    var line = $"{ts}{message}{Environment.NewLine}";
 
                     lock (_sync)
                     {
