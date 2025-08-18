@@ -1,4 +1,3 @@
-// Merge branch safe-startup-thisaddin into main: apply safer startup changes.
 using System;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -10,77 +9,94 @@ namespace OutlookMailSorter
 {
     public partial class ThisAddIn
     {
-        // Keep a reference to the Inbox Items collection so we can unsubscribe and release properly.
+        // Keep a reference to the Inbox Items collection so we can unsubscribe and release.
         private Outlook.Items _inboxItems;
 
         private void ThisAddIn_Startup(object sender, EventArgs e)
         {
             try
             {
-                // Initialize logger first (quick, non-blocking).
+                // Initialize logger quickly on startup (non-blocking).
                 Logger.Initialize();
-                Logger.Log("ThisAddIn_Startup: initialization started.");
+                Logger.Log("ThisAddIn_Startup: starting initialization.");
 
-                // Subscribe to Outlook events (short handlers only).
+                // Subscribe to events on the Outlook (UI) thread. Do minimal work in handlers.
                 this.Application.NewMailEx += Application_NewMailEx;
 
-                // Subscribe to ItemAdd on the Inbox folder (to detect delivered items).
-                var inboxFolder = this.Application.Session.GetDefaultFolder(Outlook.OlDefaultFolders.olFolderInbox) as Outlook.Folder;
-                if (inboxFolder != null)
+                // Subscribe to the Inbox ItemAdd event to detect newly delivered items.
+                var inbox = this.Application.Session.GetDefaultFolder(Outlook.OlDefaultFolders.olFolderInbox) as Outlook.Folder;
+                if (inbox != null)
                 {
-                    _inboxItems = inboxFolder.Items;
+                    _inboxItems = inbox.Items;
                     _inboxItems.ItemAdd += InboxItems_ItemAdd;
 
-                    // Release folder COM reference (we keep Items reference).
+                    // Release the local reference to the folder (we keep Items only).
                     try
                     {
-                        Marshal.ReleaseComObject(inboxFolder);
+                        Marshal.ReleaseComObject(inbox);
                     }
                     catch (Exception ex)
                     {
-                        Logger.Log($"ThisAddIn_Startup: failed to release inboxFolder COM object: {ex}");
+                        Logger.Log($"ThisAddIn_Startup: failed to release inbox COM object: {ex}");
                     }
-                    inboxFolder = null;
-                }
-                else
-                {
-                    Logger.Log("ThisAddIn_Startup: inbox folder was null.");
+                    inbox = null;
                 }
 
                 Logger.Log("ThisAddIn_Startup: event subscriptions completed.");
 
-                // SAFE STARTUP: avoid blocking UI with MessageBox.Show on startup.
-                // Instead, log and set a non-blocking status message in Outlook (if possible).
+                // Read commit info from COMMIT_INFO.txt (created at commit time). Fallback to current UTC if missing.
+                string commitTimestamp = null;
                 try
                 {
-                    Logger.Log("ThisAddIn_Startup: setting non-blocking status message instead of MessageBox.");
-                    var explorer = this.Application.ActiveExplorer();
-                    if (explorer != null)
+                    // Try repository root locations relative to the assembly base directory.
+                    var repoRoot = AppDomain.CurrentDomain.BaseDirectory ?? Environment.CurrentDirectory;
+
+                    // Search upward from the base directory for COMMIT_INFO.txt (covering bin/Debug/bin/Release cases).
+                    string candidate = null;
+                    var dir = new DirectoryInfo(repoRoot);
+                    for (int i = 0; i < 4 && dir != null; i++)
                     {
-                        try
+                        var path = Path.Combine(dir.FullName, "COMMIT_INFO.txt");
+                        if (File.Exists(path))
                         {
-                            explorer.StatusBar = "OutlookMailSorter: Ready";
+                            candidate = path;
+                            break;
                         }
-                        catch (Exception ex)
-                        {
-                            // If setting the status bar fails, log but do not throw.
-                            Logger.Log($"ThisAddIn_Startup: failed to set StatusBar: {ex}");
-                        }
+                        dir = dir.Parent;
                     }
-                    else
+
+                    if (!string.IsNullOrEmpty(candidate))
                     {
-                        Logger.Log("ThisAddIn_Startup: ActiveExplorer is null; skipping StatusBar update.");
+                        commitTimestamp = File.ReadAllText(candidate).Trim();
                     }
                 }
                 catch (Exception ex)
                 {
-                    // Protect startup from unexpected exceptions and log instead of throwing.
-                    Logger.Log($"ThisAddIn_Startup: non-blocking status update threw an exception: {ex}");
+                    Logger.Log($"ThisAddIn_Startup: error reading COMMIT_INFO.txt: {ex}");
+                    commitTimestamp = null;
+                }
+
+                if (string.IsNullOrEmpty(commitTimestamp))
+                {
+                    commitTimestamp = DateTime.UtcNow.ToString("o") + " (UTC)"; // fallback
+                }
+
+                // PER USER REQUEST: Keep the MessageBox for now — include commit timestamp in the text.
+                // WARNING: This is blocking on the Outlook UI thread. Consider removing or replacing later.
+                try
+                {
+                    var message = $"OutlookMailSorter initialized.\nLatest commit timestamp: {commitTimestamp}";
+                    MessageBox.Show(message, "OutlookMailSorter", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                catch (Exception ex)
+                {
+                    // Protect startup from MessageBox exceptions (rare) and log instead of throwing.
+                    Logger.Log($"ThisAddIn_Startup: MessageBox.Show threw an exception: {ex}");
                 }
             }
             catch (Exception ex)
             {
-                // Log any startup exception (do not show blocking UI).
+                // Log startup exceptions; do NOT show blocking UI.
                 Logger.Log($"ThisAddIn_Startup: exception during startup: {ex}");
             }
         }
@@ -89,9 +105,9 @@ namespace OutlookMailSorter
         {
             Logger.Log("ThisAddIn_Shutdown: shutting down.");
 
-            // Unsubscribe events and release COM references defensively.
             try
             {
+                // Unsubscribe from NewMailEx
                 try
                 {
                     this.Application.NewMailEx -= Application_NewMailEx;
@@ -101,6 +117,7 @@ namespace OutlookMailSorter
                     Logger.Log($"ThisAddIn_Shutdown: error unsubscribing NewMailEx: {ex}");
                 }
 
+                // Unsubscribe and release the Inbox Items collection
                 if (_inboxItems != null)
                 {
                     try
@@ -136,18 +153,17 @@ namespace OutlookMailSorter
             }
         }
 
-        // Called on Outlook UI thread. Keep brief and offload heavier work.
+        // NewMailEx is called on the Outlook thread. Keep processing minimal here.
         private void Application_NewMailEx(string entryIDCollection)
         {
             try
             {
-                Logger.Log($"Application_NewMailEx: entryIDs: {entryIDCollection}");
+                Logger.Log($"Application_NewMailEx: received entries: {entryIDCollection}");
 
-                // Do minimal work on the Outlook thread; offload CPU-bound or non-COM work to background tasks.
+                // Offload heavier/CPU-bound work to a background task. Do NOT access Outlook COM objects from background threads.
                 Task.Run(() =>
                 {
-                    // Placeholder for background processing that does not touch Outlook COM objects.
-                    Logger.Log($"Background worker: handling NewMailEx IDs: {entryIDCollection}");
+                    Logger.Log($"Background task: new mail reference processing for IDs: {entryIDCollection}");
                 });
             }
             catch (Exception ex)
@@ -156,7 +172,7 @@ namespace OutlookMailSorter
             }
         }
 
-        // Runs on Outlook UI thread whenever an item is added to Inbox.
+        // ItemAdd handler runs on the Outlook (UI) thread. Keep it short.
         private void InboxItems_ItemAdd(object item)
         {
             Outlook.MailItem mail = null;
@@ -165,18 +181,17 @@ namespace OutlookMailSorter
                 mail = item as Outlook.MailItem;
                 if (mail != null)
                 {
-                    // Read small set of properties while on UI thread.
-                    string subject = Truncate(mail.Subject, 250);
-                    string sender = Truncate(mail.SenderName, 200);
+                    // Only read a small number of properties while on the UI thread.
+                    string subject = mail.Subject;
+                    string sender = mail.SenderName;
 
-                    Logger.Log($"InboxItems_ItemAdd: Subject=\"{subject}\", Sender=\"{sender}\"");
+                    Logger.Log($"InboxItems_ItemAdd: new mail - Subject: \"{Truncate(subject, 250)}\", Sender: \"{Truncate(sender, 200)}\"");
 
-                    // If you need to perform operations that access Outlook COM objects,
-                    // do them on the Outlook thread in short bursts or use a marshalling strategy.
-                    Task.Run(() =>
-                    {
-                        // Placeholder for non-COM work (e.g., update DB, call web APIs).
-                        Logger.Log("Background processing (non-COM) for new MailItem.");
+                    // Offload any heavy processing to a background task. IMPORTANT:
+                    // Access to Outlook COM objects from background threads is unsafe.
+                    Task.Run(() => {
+                        // Placeholder for CPU-bound or non-COM work.
+                        Logger.Log("Background processing for the newly arrived mail (non-COM work).");
                     });
                 }
                 else
@@ -198,7 +213,7 @@ namespace OutlookMailSorter
                     }
                     catch
                     {
-                        // Swallow release exceptions to avoid interfering with Outlook.
+                        // swallowing errors from ReleaseComObject
                     }
                     mail = null;
                 }
@@ -206,6 +221,7 @@ namespace OutlookMailSorter
         }
 
         #region VSTO generated code
+
         /// <summary>
         /// Required method for Designer support - do not modify the contents of this method with the code editor.
         /// </summary>
@@ -214,20 +230,21 @@ namespace OutlookMailSorter
             this.Startup += new System.EventHandler(ThisAddIn_Startup);
             this.Shutdown += new System.EventHandler(ThisAddIn_Shutdown);
         }
+
         #endregion
 
-        // Helper to truncate long strings for logging
+        // Helper to truncate long strings for log safety
         private static string Truncate(string value, int maxLength)
         {
             if (string.IsNullOrEmpty(value)) return value;
             return (value.Length <= maxLength) ? value : value.Substring(0, maxLength) + "...";
         }
 
-        // Lightweight file logger (resilient; does not throw).
+        // Simple file logger for diagnostics (safe to use on startup).
         private static class Logger
         {
-            private static readonly object _sync = new object();
             private static string _logFilePath;
+            private static readonly object _sync = new object();
             private static bool _initialized;
 
             public static void Initialize()
@@ -244,29 +261,13 @@ namespace OutlookMailSorter
                         Directory.CreateDirectory(folder);
                         _logFilePath = Path.Combine(folder, "logs.txt");
 
-                        // Ensure the log file exists and write initial entry.
-                        try
-                        {
-                            if (!File.Exists(_logFilePath))
-                            {
-                                File.WriteAllText(_logFilePath, string.Empty);
-                            }
-                        }
-                        catch
-                        {
-                            // If we cannot create the file, proceed with _logFilePath set; Log will handle failures.
-                        }
-
-                        // Note: for production you may want to rotate or limit log size.
+                        // Optional: limit file size, rotate if too large - omitted for brevity.
                         Log("Logger initialized.");
+                        _initialized = true;
                     }
                     catch
                     {
-                        // If logging cannot be initialized, mark as initialized to avoid repeated attempts.
                         _logFilePath = null;
-                    }
-                    finally
-                    {
                         _initialized = true;
                     }
                 }
@@ -277,7 +278,7 @@ namespace OutlookMailSorter
                 try
                 {
                     var ts = DateTime.UtcNow.ToString("o");
-                    var line = $"{ts} {message}{Environment.NewLine}";
+                    var line = $"{ts}{message}{Environment.NewLine}";
 
                     lock (_sync)
                     {
@@ -285,12 +286,11 @@ namespace OutlookMailSorter
                         {
                             File.AppendAllText(_logFilePath, line);
                         }
-                        // If there's no file path, drop the log (don't throw).
                     }
                 }
                 catch
                 {
-                    // Swallow all exceptions from logging to avoid destabilizing Outlook.
+                    // Do not propagate exceptions from logging.
                 }
             }
         }
