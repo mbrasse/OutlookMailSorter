@@ -4,6 +4,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using System.Reflection;
 using Outlook = Microsoft.Office.Interop.Outlook;
 
 namespace OutlookMailSorter
@@ -76,6 +77,75 @@ namespace OutlookMailSorter
                 {
                     // Protect startup from unexpected exceptions and log instead of throwing.
                     Logger.Log($"ThisAddIn_Startup: non-blocking status update threw an exception: {ex}");
+                }
+
+                // Feature branch change: read COMMIT_INFO.txt and update MessageBox text.
+                // Mirror updated implementation: read commit info and present it in a MessageBox (with defensive logging).
+                try
+                {
+                    string commitInfo = null;
+                    try
+                    {
+                        // Primary location: same folder as the add-in assembly.
+                        var assemblyLocation = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? AppDomain.CurrentDomain.BaseDirectory;
+                        var primaryPath = Path.Combine(assemblyLocation, "COMMIT_INFO.txt");
+
+                        if (File.Exists(primaryPath))
+                        {
+                            commitInfo = File.ReadAllText(primaryPath);
+                            Logger.Log($"ThisAddIn_Startup: read COMMIT_INFO from assembly folder: {primaryPath}");
+                        }
+                        else
+                        {
+                            // Fallback location: LocalApplicationData\OutlookMailSorter\COMMIT_INFO.txt
+                            var fallbackPath = Path.Combine(
+                                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                                "OutlookMailSorter",
+                                "COMMIT_INFO.txt");
+                            if (File.Exists(fallbackPath))
+                            {
+                                commitInfo = File.ReadAllText(fallbackPath);
+                                Logger.Log($"ThisAddIn_Startup: read COMMIT_INFO from LocalApplicationData: {fallbackPath}");
+                            }
+                            else
+                            {
+                                Logger.Log("ThisAddIn_Startup: COMMIT_INFO.txt not found in known locations.");
+                            }
+                        }
+
+                        if (!string.IsNullOrEmpty(commitInfo))
+                        {
+                            // Normalize whitespace for display and truncate to a reasonable length.
+                            commitInfo = commitInfo.Replace("\r\n", " ").Replace("\n", " ").Trim();
+                            commitInfo = Truncate(commitInfo, 1000);
+                        }
+                        else
+                        {
+                            commitInfo = "Commit information not available.";
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        commitInfo = $"Failed to read commit info: {ex.Message}";
+                        Logger.Log($"ThisAddIn_Startup: reading COMMIT_INFO failed: {ex}");
+                    }
+
+                    // Compose message text and display to the user.
+                    try
+                    {
+                        var message = $"OutlookMailSorter: Ready{Environment.NewLine}{commitInfo}";
+                        Logger.Log("ThisAddIn_Startup: showing startup MessageBox with commit info.");
+                        MessageBox.Show(message, "OutlookMailSorter", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }
+                    catch (Exception ex)
+                    {
+                        // If showing a MessageBox fails (e.g., no UI context), log and continue.
+                        Logger.Log($"ThisAddIn_Startup: MessageBox.Show threw exception: {ex}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.Log($"ThisAddIn_Startup: unexpected exception while handling COMMIT_INFO message: {ex}");
                 }
             }
             catch (Exception ex)
