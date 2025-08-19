@@ -1,18 +1,21 @@
-name: Squash-merge PR via GitHub App
+name: Safe squash-merge checks via GitHub App
 
 on:
   workflow_dispatch:
     inputs:
       pull_number:
-        description: 'Pull request number to squash-merge'
+        description: 'Pull request number to run safe merge checks for'
         required: true
         type: number
 
 permissions:
   contents: read
+  pull-requests: read
+  checks: write
 
 jobs:
-  squash-merge:
+  run-safe-merge-checks:
+    name: Run safe merge checks
     runs-on: ubuntu-latest
     env:
       APP_ID: ${{ secrets.APP_ID }}
@@ -22,6 +25,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -55,11 +60,11 @@ jobs:
             npm install @octokit/app @octokit/rest
           fi
 
-      - name: Run squash-merge script
+      - name: Run safe merge checks
         env:
           APP_ID: ${{ secrets.APP_ID }}
           PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           PULL_NUMBER: ${{ github.event.inputs.pull_number }}
         run: |
-          node scripts/merge-pr.js
+          node scripts/merge-pr-checks.js
