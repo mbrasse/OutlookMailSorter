@@ -1,0 +1,35 @@
+name: Squash-merge PR via GitHub App
+
+on:
+  workflow_dispatch:
+    inputs:
+      pull_number:
+        description: 'Pull request number to squash-merge'
+        required: true
+        type: number
+
+permissions:
+  contents: read
+
+jobs:
+  squash-merge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install dependencies
+        run: |
+          npm init -y
+          npm install @octokit/app @octokit/rest
+
+      - name: Run squash-merge script
+        env:
+          APP_ID: ${{ secrets.APP_ID }}
+          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PULL_NUMBER: ${{ github.event.inputs.pull_number }}
+        run: |
+          node scripts/merge-pr.js
