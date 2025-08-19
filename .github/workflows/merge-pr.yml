@@ -14,16 +14,46 @@ permissions:
 jobs:
   squash-merge:
     runs-on: ubuntu-latest
+    env:
+      APP_ID: ${{ secrets.APP_ID }}
+      PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      PULL_NUMBER: ${{ github.event.inputs.pull_number }}
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 18
+          cache: 'npm'
+
+      - name: Debug workspace
+        run: |
+          echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
+          echo "Repository: $GITHUB_REPOSITORY"
+          pwd
+          echo "Top-level files:"
+          ls -la || true
+          echo "Listing repository contents (up to 3 levels):"
+          find . -maxdepth 3 -print || true
 
       - name: Install dependencies
         run: |
-          npm init -y
-          npm install @octokit/app @octokit/rest
+          # Prefer npm ci if a lockfile is present for reproducible installs
+          if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+            echo "Lockfile detected, running npm ci"
+            npm ci
+          else
+            echo "No lockfile detected"
+            if [ ! -f package.json ]; then
+              echo "Initializing package.json"
+              npm init -y
+            fi
+            echo "Installing required dependencies"
+            npm install @octokit/app @octokit/rest
+          fi
 
       - name: Run squash-merge script
         env:
