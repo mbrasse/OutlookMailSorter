@@ -1,43 +1,56 @@
 // scripts/merge-pr-checks.js
 // Safer merge script for GitHub App (CommonJS friendly, uses dynamic ESM imports):
 // - Uses dynamic import() to consume modern @octokit packages without require() errors.
+// - Uses @octokit/auth-app's createAppAuth for authentication (recommended).
 // - Requires env: APP_ID, PRIVATE_KEY, GITHUB_REPOSITORY, PULL_NUMBER
 // - Checks PR draft state, required approvals, and (optionally) status checks before merging.
 // - Default merge method: squash
 //
-// Commit message update: Switch to ESM dynamic import usage to avoid require() errors with modern @octokit packages.
-// Retains previous behavior and CLI interface.
+// Note: This script attempts to be compatible when executed as CommonJS (node) scripts
+// and when the underlying @octokit packages are ESM-only by using dynamic imports.
 
 'use strict';
 
-async function dynamicImportOctokit() {
+async function dynamicImportOctokitAndAuth() {
   // Dynamically import both packages; this avoids require() issues in environments where
   // packages are published as ESM-only.
-  const appMod = await import('@octokit/app');
   const restMod = await import('@octokit/rest');
-  // Named exports expected
-  const App = appMod.App || appMod.default;
+  const authAppMod = await import('@octokit/auth-app');
+
   const Octokit = restMod.Octokit || restMod.default;
-  if (!App) throw new Error('Failed to import App from @octokit/app');
+  // createAppAuth can be a named export or the default export depending on packaging
+  const createAppAuth = authAppMod.createAppAuth || authAppMod.default || null;
+
   if (!Octokit) throw new Error('Failed to import Octokit from @octokit/rest');
-  return { App, Octokit };
+  if (!createAppAuth) throw new Error('Failed to import createAppAuth from @octokit/auth-app');
+  return { Octokit, createAppAuth };
 }
 
 async function getInstallationToken(appId, privateKey, owner, repo) {
-  const { App, Octokit } = await dynamicImportOctokit();
-  const app = new App({ appId: Number(appId), privateKey });
-  const jwt = app.getSignedJsonWebToken();
-  const appOctokit = new Octokit({ auth: jwt });
+  const { Octokit, createAppAuth } = await dynamicImportOctokitAndAuth();
+
+  // Normalize private key newlines if stored with \n
+  privateKey = privateKey.replace(/\\n/g, '\n');
+
+  // Use authStrategy createAppAuth to perform app-level requests and token exchange
+  const appOctokit = new Octokit({
+    authStrategy: createAppAuth,
+    auth: {
+      appId: Number(appId),
+      privateKey,
+    },
+  });
 
   // Get installation for this repo
   const installResp = await appOctokit.request('GET /repos/{owner}/{repo}/installation', { owner, repo });
   const installationId = installResp && installResp.data && installResp.data.id;
   if (!installationId) throw new Error('Could not find installation id for repository');
-  const tokenResp = await appOctokit.request('POST /app/installations/{installation_id}/access_tokens', {
-    installation_id: installationId,
-  });
-  if (!tokenResp || !tokenResp.data || !tokenResp.data.token) throw new Error('Failed to obtain installation access token');
-  return tokenResp.data.token;
+
+  // Exchange for an installation access token
+  const authResult = await appOctokit.auth({ type: 'installation', installationId });
+  if (!authResult || !authResult.token) throw new Error('Failed to obtain installation access token');
+
+  return authResult.token;
 }
 
 async function waitForStatusChecks(octokit, owner, repo, ref, requiredContexts = [], timeoutMs = 5 * 60 * 1000) {
@@ -78,12 +91,10 @@ async function mergeIfReady({ appId, privateKey, owner, repo, pull_number, merge
   if (!privateKey) throw new Error('PRIVATE_KEY missing');
   if (!owner || !repo) throw new Error('Repository owner or name missing');
 
-  // Normalize private key newlines if stored with \n
-  privateKey = privateKey.replace(/\\n/g, '\n');
-
+  // Obtain installation token using createAppAuth flow
   const token = await getInstallationToken(appId, privateKey, owner, repo);
 
-  const { Octokit } = await dynamicImportOctokit();
+  const { Octokit } = await dynamicImportOctokitAndAuth();
   const octokit = new Octokit({ auth: token });
 
   const prResp = await octokit.pulls.get({ owner, repo, pull_number });
@@ -126,7 +137,7 @@ async function mergeIfReady({ appId, privateKey, owner, repo, pull_number, merge
 }
 
 // CLI entrypoint (CommonJS compatible)
-if (require && require.main === module) {
+if (typeof require !== 'undefined' && require && require.main === module) {
   (async () => {
     try {
       const appId = process.env.APP_ID;
@@ -166,3 +177,11 @@ if (require && require.main === module) {
     }
   })();
 }
+
+module.exports = {
+  dynamicImportOctokitAndAuth,
+  getInstallationToken,
+  waitForStatusChecks,
+  ensureApprovals,
+  mergeIfReady,
+};
