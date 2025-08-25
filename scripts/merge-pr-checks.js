@@ -25,7 +25,7 @@ async function dynamicImportOctokit() {
 
 async function getInstallationToken(appId, privateKey, owner, repo) {
   const { App, Octokit } = await dynamicImportOctokit();
-  const app = new App({ id: Number(appId), privateKey });
+  const app = new App({ appId: Number(appId), privateKey });
   const jwt = app.getSignedJsonWebToken();
   const appOctokit = new Octokit({ auth: jwt });
 
