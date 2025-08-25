@@ -45,48 +45,16 @@ namespace OutlookMailSorter
 
                 Logger.Log("ThisAddIn_Startup: event subscriptions completed.");
 
-                // Read commit info from COMMIT_INFO.txt (created at commit time). Fallback to current UTC if missing.
-                string commitTimestamp = null;
+                // Read commit info from possible locations (created at commit time). Fallback to current UTC if missing.
+                string commitInfo = ReadCommitInfo();
+                Logger.Log($"ThisAddIn_Startup: commit info obtained: {Truncate(commitInfo, 500)}");
+
+#if DEBUG
+                // Only show a blocking MessageBox in DEBUG builds to avoid blocking Outlook for end users.
                 try
                 {
-                    // Try repository root locations relative to the assembly base directory.
-                    var repoRoot = AppDomain.CurrentDomain.BaseDirectory ?? Environment.CurrentDirectory;
-
-                    // Search upward from the base directory for COMMIT_INFO.txt (covering bin/Debug/bin/Release cases).
-                    string candidate = null;
-                    var dir = new DirectoryInfo(repoRoot);
-                    for (int i = 0; i < 4 && dir != null; i++)
-                    {
-                        var path = Path.Combine(dir.FullName, "COMMIT_INFO.txt");
-                        if (File.Exists(path))
-                        {
-                            candidate = path;
-                            break;
-                        }
-                        dir = dir.Parent;
-                    }
-
-                    if (!string.IsNullOrEmpty(candidate))
-                    {
-                        commitTimestamp = File.ReadAllText(candidate).Trim();
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Logger.Log($"ThisAddIn_Startup: error reading COMMIT_INFO.txt: {ex}");
-                    commitTimestamp = null;
-                }
-
-                if (string.IsNullOrEmpty(commitTimestamp))
-                {
-                    commitTimestamp = DateTime.UtcNow.ToString("o") + " (UTC)"; // fallback
-                }
-
-                // PER USER REQUEST: Keep the MessageBox for now — include commit timestamp in the text.
-                // WARNING: This is blocking on the Outlook UI thread. Consider removing or replacing later.
-                try
-                {
-                    var message = $"OutlookMailSorter initialized.\nLatest commit timestamp: {commitTimestamp}";
+                    var message = $"OutlookMailSorter initialized.{Environment.NewLine}Commit info: {commitInfo}";
+                    Logger.Log("ThisAddIn_Startup: showing startup MessageBox with commit info (DEBUG).");
                     MessageBox.Show(message, "OutlookMailSorter", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
                 catch (Exception ex)
@@ -94,75 +62,9 @@ namespace OutlookMailSorter
                     // Protect startup from MessageBox exceptions (rare) and log instead of throwing.
                     Logger.Log($"ThisAddIn_Startup: MessageBox.Show threw an exception: {ex}");
                 }
-
-                // Feature branch change: read COMMIT_INFO.txt and update MessageBox text.
-                // Mirror updated implementation: read commit info and present it in a MessageBox (with defensive logging).
-                try
-                {
-                    string commitInfo = null;
-                    try
-                    {
-                        // Primary location: same folder as the add-in assembly.
-                        var assemblyLocation = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? AppDomain.CurrentDomain.BaseDirectory;
-                        var primaryPath = Path.Combine(assemblyLocation, "COMMIT_INFO.txt");
-
-                        if (File.Exists(primaryPath))
-                        {
-                            commitInfo = File.ReadAllText(primaryPath);
-                            Logger.Log($"ThisAddIn_Startup: read COMMIT_INFO from assembly folder: {primaryPath}");
-                        }
-                        else
-                        {
-                            // Fallback location: LocalApplicationData\OutlookMailSorter\COMMIT_INFO.txt
-                            var fallbackPath = Path.Combine(
-                                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                                "OutlookMailSorter",
-                                "COMMIT_INFO.txt");
-                            if (File.Exists(fallbackPath))
-                            {
-                                commitInfo = File.ReadAllText(fallbackPath);
-                                Logger.Log($"ThisAddIn_Startup: read COMMIT_INFO from LocalApplicationData: {fallbackPath}");
-                            }
-                            else
-                            {
-                                Logger.Log("ThisAddIn_Startup: COMMIT_INFO.txt not found in known locations.");
-                            }
-                        }
-
-                        if (!string.IsNullOrEmpty(commitInfo))
-                        {
-                            // Normalize whitespace for display and truncate to a reasonable length.
-                            commitInfo = commitInfo.Replace("\r\n", " ").Replace("\n", " ").Trim();
-                            commitInfo = Truncate(commitInfo, 1000);
-                        }
-                        else
-                        {
-                            commitInfo = "Commit information not available.";
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        commitInfo = $"Failed to read commit info: {ex.Message}";
-                        Logger.Log($"ThisAddIn_Startup: reading COMMIT_INFO failed: {ex}");
-                    }
-
-                    // Compose message text and display to the user.
-                    try
-                    {
-                        var message = $"OutlookMailSorter: Ready{Environment.NewLine}{commitInfo}";
-                        Logger.Log("ThisAddIn_Startup: showing startup MessageBox with commit info.");
-                        MessageBox.Show(message, "OutlookMailSorter", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    }
-                    catch (Exception ex)
-                    {
-                        // If showing a MessageBox fails (e.g., no UI context), log and continue.
-                        Logger.Log($"ThisAddIn_Startup: MessageBox.Show threw exception: {ex}");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Logger.Log($"ThisAddIn_Startup: unexpected exception while handling COMMIT_INFO message: {ex}");
-                }
+#else
+                Logger.Log("ThisAddIn_Startup: skipping MessageBox display in non-DEBUG build.");
+#endif
             }
             catch (Exception ex)
             {
@@ -310,6 +212,96 @@ namespace OutlookMailSorter
             return (value.Length <= maxLength) ? value : value.Substring(0, maxLength) + "...";
         }
 
+        // Read commit info from several known locations in a safe, non-throwing way.
+        private static string ReadCommitInfo()
+        {
+            try
+            {
+                string content = null;
+
+                // 1) Primary: next to the add-in assembly
+                try
+                {
+                    var assemblyLocation = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+                    if (!string.IsNullOrEmpty(assemblyLocation))
+                    {
+                        var primaryPath = Path.Combine(assemblyLocation, "COMMIT_INFO.txt");
+                        if (File.Exists(primaryPath))
+                        {
+                            content = File.ReadAllText(primaryPath).Trim();
+                            Logger.Log($"ReadCommitInfo: found COMMIT_INFO at assembly folder: {primaryPath}");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.Log($"ReadCommitInfo: error reading from assembly folder: {ex}");
+                }
+
+                // 2) Fallback: LocalApplicationData\OutlookMailSorter\COMMIT_INFO.txt
+                if (string.IsNullOrEmpty(content))
+                {
+                    try
+                    {
+                        var fallbackPath = Path.Combine(
+                            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                            "OutlookMailSorter",
+                            "COMMIT_INFO.txt");
+                        if (File.Exists(fallbackPath))
+                        {
+                            content = File.ReadAllText(fallbackPath).Trim();
+                            Logger.Log($"ReadCommitInfo: found COMMIT_INFO at LocalApplicationData: {fallbackPath}");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Log($"ReadCommitInfo: error reading from LocalApplicationData: {ex}");
+                    }
+                }
+
+                // 3) Fallback: search upward from the base directory (covers build/CI layouts)
+                if (string.IsNullOrEmpty(content))
+                {
+                    try
+                    {
+                        var repoRoot = AppDomain.CurrentDomain.BaseDirectory ?? Environment.CurrentDirectory;
+                        var dir = new DirectoryInfo(repoRoot);
+                        for (int i = 0; i < 6 && dir != null; i++)
+                        {
+                            var path = Path.Combine(dir.FullName, "COMMIT_INFO.txt");
+                            if (File.Exists(path))
+                            {
+                                content = File.ReadAllText(path).Trim();
+                                Logger.Log($"ReadCommitInfo: found COMMIT_INFO by searching up from base: {path}");
+                                break;
+                            }
+                            dir = dir.Parent;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Log($"ReadCommitInfo: error during upward search: {ex}");
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(content))
+                {
+                    // Normalize whitespace for display and truncate to a reasonable length.
+                    content = content.Replace("\r\n", " ").Replace("\n", " ").Trim();
+                    content = Truncate(content, 1000);
+                    return content;
+                }
+
+                // Final fallback: timestamp indicating absence.
+                return $"{DateTime.UtcNow.ToString("o")} (no commit info available)";
+            }
+            catch (Exception ex)
+            {
+                Logger.Log($"ReadCommitInfo: unexpected exception: {ex}");
+                return $"Failed to read commit info: {ex.Message}";
+            }
+        }
+
         // Simple file logger for diagnostics (safe to use on startup).
         private static class Logger
         {
@@ -331,9 +323,21 @@ namespace OutlookMailSorter
                         Directory.CreateDirectory(folder);
                         _logFilePath = Path.Combine(folder, "logs.txt");
 
-                        // Optional: limit file size, rotate if too large - omitted for brevity.
-                        Log("Logger initialized.");
+                        // Create or append a header so the file exists and it's clear when the process started.
+                        try
+                        {
+                            var header = $"=== OutlookMailSorter log started at {DateTime.UtcNow.ToString("o")} (UTC) ==={Environment.NewLine}";
+                            File.AppendAllText(_logFilePath, header);
+                        }
+                        catch (Exception ex)
+                        {
+                            // If header write fails, still continue without throwing.
+                            _logFilePath = _logFilePath; // no-op to avoid warnings
+                            // We will rely on Log's internal try/catch.
+                        }
+
                         _initialized = true;
+                        Log("Logger initialized.");
                     }
                     catch
                     {
@@ -348,7 +352,7 @@ namespace OutlookMailSorter
                 try
                 {
                     var ts = DateTime.UtcNow.ToString("o");
-                    var line = $"{ts}{message}{Environment.NewLine}";
+                    var line = $"{ts} - {message}{Environment.NewLine}";
 
                     lock (_sync)
                     {
