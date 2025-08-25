@@ -1,0 +1,30 @@
+name: ci-style
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  style:
+    name: style
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET SDK (for tools)
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Install dotnet-format
+        run: dotnet tool install -g dotnet-format
+
+      - name: Verify formatting (whitespace only, folder mode)
+        shell: pwsh
+        run: |
+          $env:PATH += ";$env:USERPROFILE\.dotnet\tools"
+          dotnet format whitespace --verify-no-changes --folder . --verbosity minimal
