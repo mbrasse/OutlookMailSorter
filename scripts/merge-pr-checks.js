@@ -1,23 +1,42 @@
 // scripts/merge-pr-checks.js
-// Safer merge script for GitHub App:
+// Safer merge script for GitHub App (CommonJS friendly, uses dynamic ESM imports):
+// - Uses dynamic import() to consume modern @octokit packages without require() errors.
 // - Requires env: APP_ID, PRIVATE_KEY, GITHUB_REPOSITORY, PULL_NUMBER
 // - Checks PR draft state, required approvals, and (optionally) status checks before merging.
+// - Default merge method: squash
+//
+// Commit message update: Switch to ESM dynamic import usage to avoid require() errors with modern @octokit packages.
+// Retains previous behavior and CLI interface.
 
-const { App } = require('@octokit/app');
-const { Octokit } = require('@octokit/rest');
+'use strict';
+
+async function dynamicImportOctokit() {
+  // Dynamically import both packages; this avoids require() issues in environments where
+  // packages are published as ESM-only.
+  const appMod = await import('@octokit/app');
+  const restMod = await import('@octokit/rest');
+  // Named exports expected
+  const App = appMod.App || appMod.default;
+  const Octokit = restMod.Octokit || restMod.default;
+  if (!App) throw new Error('Failed to import App from @octokit/app');
+  if (!Octokit) throw new Error('Failed to import Octokit from @octokit/rest');
+  return { App, Octokit };
+}
 
 async function getInstallationToken(appId, privateKey, owner, repo) {
+  const { App, Octokit } = await dynamicImportOctokit();
   const app = new App({ id: Number(appId), privateKey });
   const jwt = app.getSignedJsonWebToken();
   const appOctokit = new Octokit({ auth: jwt });
+
   // Get installation for this repo
   const installResp = await appOctokit.request('GET /repos/{owner}/{repo}/installation', { owner, repo });
-  const installationId = installResp.data.id;
+  const installationId = installResp && installResp.data && installResp.data.id;
   if (!installationId) throw new Error('Could not find installation id for repository');
   const tokenResp = await appOctokit.request('POST /app/installations/{installation_id}/access_tokens', {
     installation_id: installationId,
   });
-  if (!tokenResp.data || !tokenResp.data.token) throw new Error('Failed to obtain installation access token');
+  if (!tokenResp || !tokenResp.data || !tokenResp.data.token) throw new Error('Failed to obtain installation access token');
   return tokenResp.data.token;
 }
 
@@ -26,9 +45,9 @@ async function waitForStatusChecks(octokit, owner, repo, ref, requiredContexts =
   while (Date.now() - start < timeoutMs) {
     // Use combined status API
     const resp = await octokit.repos.getCombinedStatusForRef({ owner, repo, ref });
-    const state = resp.data.state; // 'success', 'pending', 'failure'
-    if (requiredContexts.length > 0) {
-      const contexts = resp.data.statuses || [];
+    const state = resp && resp.data && resp.data.state; // 'success', 'pending', 'failure'
+    if (requiredContexts && requiredContexts.length > 0) {
+      const contexts = (resp && resp.data && resp.data.statuses) || [];
       const ok = requiredContexts.every(ctx => contexts.find(s => s.context === ctx && s.state === 'success'));
       if (ok) return true;
     } else {
@@ -42,45 +61,54 @@ async function waitForStatusChecks(octokit, owner, repo, ref, requiredContexts =
 
 async function ensureApprovals(octokit, owner, repo, pull_number, requiredApprovals = 1) {
   const reviewsResp = await octokit.pulls.listReviews({ owner, repo, pull_number });
+  const reviews = (reviewsResp && reviewsResp.data) || [];
   // Only consider the latest review by each user
   const latestByUser = new Map();
-  for (const r of reviewsResp.data) {
-    latestByUser.set(r.user.login, r);
+  for (const r of reviews) {
+    if (r && r.user && r.user.login) {
+      latestByUser.set(r.user.login, r);
+    }
   }
   const approved = [...latestByUser.values()].filter(r => r.state === 'APPROVED').length;
   return approved >= requiredApprovals;
 }
 
 async function mergeIfReady({ appId, privateKey, owner, repo, pull_number, mergeMethod = 'squash', requiredContexts = [], requiredApprovals = 1 }) {
+  if (!appId) throw new Error('APP_ID missing');
+  if (!privateKey) throw new Error('PRIVATE_KEY missing');
+  if (!owner || !repo) throw new Error('Repository owner or name missing');
+
   // Normalize private key newlines if stored with \n
   privateKey = privateKey.replace(/\\n/g, '\n');
 
   const token = await getInstallationToken(appId, privateKey, owner, repo);
+
+  const { Octokit } = await dynamicImportOctokit();
   const octokit = new Octokit({ auth: token });
 
   const prResp = await octokit.pulls.get({ owner, repo, pull_number });
-  const pr = prResp.data;
+  const pr = prResp && prResp.data;
   if (!pr) throw new Error('PR not found');
 
   if (pr.draft) throw new Error('PR is a draft');
 
   // Wait for mergeable state to be computed (GitHub may return null initially)
   let attempts = 0;
-  while (pr.mergeable === null && attempts < 10) {
+  let currentPr = pr;
+  while ((currentPr.mergeable === null || currentPr.mergeable === undefined) && attempts < 10) {
     await new Promise(r => setTimeout(r, 2000));
     const fresh = await octokit.pulls.get({ owner, repo, pull_number });
-    if (fresh.data.mergeable !== null) {
-      pr.mergeable = fresh.data.mergeable;
-      pr.mergeable_state = fresh.data.mergeable_state;
-      break;
+    if (fresh && fresh.data) {
+      currentPr = fresh.data;
+      if (currentPr.mergeable !== null && currentPr.mergeable !== undefined) break;
     }
     attempts++;
   }
-  if (pr.mergeable === false) throw new Error(`PR is not mergeable: ${pr.mergeable_state}`);
+  if (currentPr.mergeable === false) throw new Error(`PR is not mergeable: ${currentPr.mergeable_state || 'unknown'}`);
 
   // Optionally wait for required status checks (if any)
   if (requiredContexts && requiredContexts.length > 0) {
-    await waitForStatusChecks(octokit, owner, repo, pr.head.sha, requiredContexts);
+    await waitForStatusChecks(octokit, owner, repo, currentPr.head.sha, requiredContexts);
   }
 
   // Ensure approvals
@@ -94,11 +122,11 @@ async function mergeIfReady({ appId, privateKey, owner, repo, pull_number, merge
     pull_number,
     merge_method: mergeMethod,
   });
-  return mergeResp.data;
+  return mergeResp && mergeResp.data;
 }
 
-// CLI entrypoint
-if (require.main === module) {
+// CLI entrypoint (CommonJS compatible)
+if (require && require.main === module) {
   (async () => {
     try {
       const appId = process.env.APP_ID;
@@ -130,7 +158,7 @@ if (require.main === module) {
       });
 
       console.log('Merge result:', result);
-      if (result.merged) process.exit(0);
+      if (result && result.merged) process.exit(0);
       else process.exit(2);
     } catch (err) {
       console.error('Error:', err && err.message ? err.message : err);
