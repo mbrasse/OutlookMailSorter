@@ -41,6 +41,7 @@ ScaffoldingReadMe.txt
 *~
 CodeCoverage/
 /.vs
+COMMIT_INFO.txt
 
 # MSBuild Binary and Structured Log
 *.binlog
