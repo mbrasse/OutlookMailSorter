@@ -47,14 +47,27 @@ namespace OutlookMailSorter
 
                 // Read commit info from possible locations (created at commit time). Fallback to current UTC if missing.
                 string commitInfo = ReadCommitInfo();
-                Logger.Log($"ThisAddIn_Startup: commit info obtained: {Truncate(commitInfo, 500)}");
+
+                // Obtain local build (link) time safely.
+                string buildTimeLocal = "unavailable";
+                try
+                {
+                    var localDt = GetLinkerTime(Assembly.GetExecutingAssembly(), TimeZoneInfo.Local);
+                    buildTimeLocal = localDt.ToString("o");
+                }
+                catch (Exception ex)
+                {
+                    Logger.Log($"ThisAddIn_Startup: failed to obtain build time: {ex}");
+                }
+
+                Logger.Log($"ThisAddIn_Startup: commit info obtained: {Truncate(commitInfo, 500)}; build time (local): {buildTimeLocal}");
 
 #if DEBUG
                 // Only show a blocking MessageBox in DEBUG builds to avoid blocking Outlook for end users.
                 try
                 {
-                    var message = $"OutlookMailSorter initialized.{Environment.NewLine}Commit info: {commitInfo}";
-                    Logger.Log("ThisAddIn_Startup: showing startup MessageBox with commit info (DEBUG).");
+                    var message = $"OutlookMailSorter initialized.{Environment.NewLine}Commit info: {commitInfo}{Environment.NewLine}Build time (local): {buildTimeLocal}";
+                    Logger.Log("ThisAddIn_Startup: showing startup MessageBox with commit info and build time (DEBUG).");
                     MessageBox.Show(message, "OutlookMailSorter", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
                 catch (Exception ex)
@@ -300,6 +313,38 @@ namespace OutlookMailSorter
                 Logger.Log($"ReadCommitInfo: unexpected exception: {ex}");
                 return $"Failed to read commit info: {ex.Message}";
             }
+        }
+
+        // Returns the build (link) time for the specified assembly, converted to the target time zone (Local by default).
+        private static DateTime GetLinkerTime(Assembly assembly, TimeZoneInfo targetTimeZone = null)
+        {
+            if (assembly == null) throw new ArgumentNullException(nameof(assembly));
+
+            var filePath = assembly.Location;
+            if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath))
+            {
+                // Fallback: if the path is not available, return "now" to avoid throwing during startup.
+                var nowUtc = DateTime.UtcNow;
+                if (targetTimeZone == null) targetTimeZone = TimeZoneInfo.Local;
+                return TimeZoneInfo.ConvertTimeFromUtc(nowUtc, targetTimeZone);
+            }
+
+            const int peHeaderOffset = 60;
+            const int linkerTimestampOffset = 8;
+
+            byte[] buffer = new byte[2048];
+            using (var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            {
+                stream.Read(buffer, 0, 2048);
+            }
+
+            int headerPos = BitConverter.ToInt32(buffer, peHeaderOffset);
+            int secondsSince1970 = BitConverter.ToInt32(buffer, headerPos + linkerTimestampOffset);
+            var epoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            var linkTimeUtc = epoch.AddSeconds(secondsSince1970);
+
+            if (targetTimeZone == null) targetTimeZone = TimeZoneInfo.Local;
+            return TimeZoneInfo.ConvertTimeFromUtc(linkTimeUtc, targetTimeZone);
         }
 
         // Simple file logger for diagnostics (safe to use on startup).
