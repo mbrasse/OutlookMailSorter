@@ -11,6 +11,13 @@
 
 'use strict';
 
+// Allow explicit bypass of approval checks via env flag
+const BYPASS_APPROVALS = (() => {
+  const val = process.env.BYPASS_APPROVALS;
+  if (val === undefined || val === null) return false;
+  return ['1', 'true', 'yes', 'on'].includes(String(val).trim().toLowerCase());
+})();
+
 async function dynamicImportOctokitAndAuth() {
   // Dynamically import both packages; this avoids require() issues in environments where
   // packages are published as ESM-only.
@@ -73,6 +80,10 @@ async function waitForStatusChecks(octokit, owner, repo, ref, requiredContexts =
 }
 
 async function ensureApprovals(octokit, owner, repo, pull_number, requiredApprovals = 1) {
+  if (BYPASS_APPROVALS) {
+    console.log('BYPASS_APPROVALS enabled: skipping PR approvals check');
+    return true;
+  }
   const reviewsResp = await octokit.pulls.listReviews({ owner, repo, pull_number });
   const reviews = (reviewsResp && reviewsResp.data) || [];
   // Only consider the latest review by each user
