@@ -23,8 +23,8 @@ jobs:
       - name: Install dotnet-format
         run: dotnet tool install -g dotnet-format
 
-      - name: Verify formatting (no changes allowed)
+      - name: Verify formatting (whitespace only, folder mode)
         shell: pwsh
         run: |
           $env:PATH += ";$env:USERPROFILE\.dotnet\tools"
-          dotnet format --verify-no-changes --verbosity minimal
+          dotnet format whitespace --verify-no-changes --folder . --verbosity minimal
