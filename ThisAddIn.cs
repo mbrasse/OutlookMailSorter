@@ -1,18 +1,15 @@
 using System;
+using System.Diagnostics;
 using System.IO;
-using System.Runtime.InteropServices;
-using System.Threading.Tasks;
-using System.Windows.Forms;
 using System.Reflection;
+using System.Windows.Forms;
 using Outlook = Microsoft.Office.Interop.Outlook;
+using Office = Microsoft.Office.Core;
 
 namespace OutlookMailSorter
 {
     public partial class ThisAddIn
     {
-        // Keep a reference to the Inbox Items collection so we can unsubscribe and release.
-        private Outlook.Items _inboxItems;
-
         private void ThisAddIn_Startup(object sender, EventArgs e)
         {
             try
@@ -78,144 +75,58 @@ namespace OutlookMailSorter
 #else
                 Logger.Log("ThisAddIn_Startup: skipping MessageBox display in non-DEBUG build.");
 #endif
+                var buildTime = GetLinkerTime(Assembly.GetExecutingAssembly());
+                MessageBox.Show($"Good night - Built: {buildTime:yyyy-MM-dd HH:mm zzz}", "OutlookMailSorter");
+                // TODO: Place any initialization code here
             }
             catch (Exception ex)
             {
-                // Log startup exceptions; do NOT show blocking UI.
-                Logger.Log($"ThisAddIn_Startup: exception during startup: {ex}");
+                // Safe-startup: do not crash Outlook on startup
+                Debug.WriteLine($"ThisAddIn_Startup failed: {ex}");
             }
         }
 
         private void ThisAddIn_Shutdown(object sender, EventArgs e)
         {
-            Logger.Log("ThisAddIn_Shutdown: shutting down.");
-
-            try
-            {
-                // Unsubscribe from NewMailEx
-                try
-                {
-                    this.Application.NewMailEx -= Application_NewMailEx;
-                }
-                catch (Exception ex)
-                {
-                    Logger.Log($"ThisAddIn_Shutdown: error unsubscribing NewMailEx: {ex}");
-                }
-
-                // Unsubscribe and release the Inbox Items collection
-                if (_inboxItems != null)
-                {
-                    try
-                    {
-                        _inboxItems.ItemAdd -= InboxItems_ItemAdd;
-                    }
-                    catch (Exception ex)
-                    {
-                        Logger.Log($"ThisAddIn_Shutdown: error unsubscribing ItemAdd: {ex}");
-                    }
-
-                    try
-                    {
-                        Marshal.ReleaseComObject(_inboxItems);
-                    }
-                    catch (Exception ex)
-                    {
-                        Logger.Log($"ThisAddIn_Shutdown: error releasing _inboxItems COM object: {ex}");
-                    }
-                    finally
-                    {
-                        _inboxItems = null;
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Logger.Log($"ThisAddIn_Shutdown: unexpected exception: {ex}");
-            }
-            finally
-            {
-                Logger.Log("ThisAddIn_Shutdown: complete.");
-            }
+            // Note: Outlook no longer raises this event. If you have code that 
+            //    must run when Outlook shuts down, see https://go.microsoft.com/fwlink/?LinkId=506785
         }
 
-        // NewMailEx is called on the Outlook thread. Keep processing minimal here.
-        private void Application_NewMailEx(string entryIDCollection)
+        // Returns the assembly linker timestamp converted to local time (or provided timezone)
+        private static DateTime GetLinkerTime(Assembly assembly, TimeZoneInfo targetTimeZone = null)
         {
-            try
-            {
-                Logger.Log($"Application_NewMailEx: received entries: {entryIDCollection}");
+            const int peHeaderOffset = 60;
+            const int linkerTimestampOffset = 8;
 
-                // Offload heavier/CPU-bound work to a background task. Do NOT access Outlook COM objects from background threads.
-                Task.Run(() =>
-                {
-                    Logger.Log($"Background task: new mail reference processing for IDs: {entryIDCollection}");
-                });
-            }
-            catch (Exception ex)
-            {
-                Logger.Log($"Application_NewMailEx: exception: {ex}");
-            }
-        }
+            string filePath = assembly.Location;
+            byte[] buffer = new byte[2048];
 
-        // ItemAdd handler runs on the Outlook (UI) thread. Keep it short.
-        private void InboxItems_ItemAdd(object item)
-        {
-            Outlook.MailItem mail = null;
-            try
+            using (var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read))
             {
-                mail = item as Outlook.MailItem;
-                if (mail != null)
-                {
-                    // Only read a small number of properties while on the UI thread.
-                    string subject = mail.Subject;
-                    string sender = mail.SenderName;
+                stream.Read(buffer, 0, buffer.Length);
+            }
 
-                    Logger.Log($"InboxItems_ItemAdd: new mail - Subject: \"{Truncate(subject, 250)}\", Sender: \"{Truncate(sender, 200)}\"");
+            int peHeader = BitConverter.ToInt32(buffer, peHeaderOffset);
+            int secondsSince1970 = BitConverter.ToInt32(buffer, peHeader + linkerTimestampOffset);
+            DateTime epoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            DateTime linkTimeUtc = epoch.AddSeconds(secondsSince1970);
 
-                    // Offload any heavy processing to a background task. IMPORTANT:
-                    // Access to Outlook COM objects from background threads is unsafe.
-                    Task.Run(() => {
-                        // Placeholder for CPU-bound or non-COM work.
-                        Logger.Log("Background processing for the newly arrived mail (non-COM work).");
-                    });
-                }
-                else
-                {
-                    Logger.Log("InboxItems_ItemAdd: item is not a MailItem.");
-                }
-            }
-            catch (Exception ex)
-            {
-                Logger.Log($"InboxItems_ItemAdd: exception: {ex}");
-            }
-            finally
-            {
-                if (mail != null)
-                {
-                    try
-                    {
-                        Marshal.ReleaseComObject(mail);
-                    }
-                    catch
-                    {
-                        // swallowing errors from ReleaseComObject
-                    }
-                    mail = null;
-                }
-            }
+            var tz = targetTimeZone ?? TimeZoneInfo.Local;
+            return TimeZoneInfo.ConvertTimeFromUtc(linkTimeUtc, tz);
         }
 
         #region VSTO generated code
 
         /// <summary>
-        /// Required method for Designer support - do not modify the contents of this method with the code editor.
+        /// Required method for Designer support - do not modify
+        /// the contents of this method with the code editor.
         /// </summary>
         private void InternalStartup()
         {
             this.Startup += new System.EventHandler(ThisAddIn_Startup);
             this.Shutdown += new System.EventHandler(ThisAddIn_Shutdown);
         }
-
+        
         #endregion
 
         // Helper to truncate long strings for log safety
