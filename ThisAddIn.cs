@@ -27,7 +27,7 @@ namespace OutlookMailSorter
 
         private void ThisAddIn_Shutdown(object sender, EventArgs e)
         {
-            // Note: Outlook no longer raises this event. If you have code that 
+            // Note: Outlook no longer raises this event. If you have code that
             //    must run when Outlook shuts down, see https://go.microsoft.com/fwlink/?LinkId=506785
         }
 
@@ -65,7 +65,7 @@ namespace OutlookMailSorter
             this.Startup += new System.EventHandler(ThisAddIn_Startup);
             this.Shutdown += new System.EventHandler(ThisAddIn_Shutdown);
         }
-        
+
         #endregion
     }
 }
