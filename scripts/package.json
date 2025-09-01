@@ -1,0 +1,9 @@
+{
+  "name": "smartmailsorter-ci",
+  "private": true,
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@octokit/auth-app": "7.0.1",
+    "@octokit/rest": "21.0.0"
+  }
+}
