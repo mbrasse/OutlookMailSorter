@@ -11,7 +11,7 @@ on:
 permissions:
   contents: read
   pull-requests: read
-  checks: write
+  checks: read
 
 jobs:
   run-safe-merge-checks:
@@ -31,39 +31,24 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
 
-      - name: Debug workspace
+      - name: Install deps (prefer lockfile)
+        working-directory: scripts
         run: |
-          echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
-          echo "Repository: $GITHUB_REPOSITORY"
-          pwd
-          echo "Top-level files:"
-          ls -la || true
-          echo "Listing repository contents (up to 3 levels):"
-          find . -maxdepth 3 -print || true
-
-      - name: Install dependencies
-        run: |
-          # Prefer npm ci if a lockfile is present for reproducible installs
           if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
             echo "Lockfile detected, running npm ci"
             npm ci
           else
-            echo "No lockfile detected"
-            if [ ! -f package.json ]; then
-              echo "Initializing package.json"
-              npm init -y
-            fi
-            echo "Installing required dependencies"
-            npm install @octokit/app @octokit/rest
+            echo "No lockfile detected in scripts/, installing pinned deps from package.json"
+            npm install --no-audit --no-fund
           fi
 
       - name: Run safe merge checks
+        working-directory: scripts
         env:
           APP_ID: ${{ secrets.APP_ID }}
           PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           PULL_NUMBER: ${{ github.event.inputs.pull_number }}
-        run: |
-          node scripts/merge-pr-checks.js
+        run: node merge-pr-checks.js
