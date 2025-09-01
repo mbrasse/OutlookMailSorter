@@ -1,0 +1,110 @@
+name: PR diff sweeper
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_numbers:
+        description: "Comma-separated PR numbers (e.g., 12,13,14,20)"
+        required: true
+        type: string
+      auto_close:
+        description: "Auto-close PRs with no diff and delete their branch (same-repo only)"
+        required: false
+        default: "true"
+        type: choice
+        options: ["false", "true"]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: pr-diff-sweeper-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Evaluate PR diffs
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prInput = core.getInput('pr_numbers').trim();
+            const autoClose = core.getInput('auto_close') === 'true';
+            if (!prInput) {
+              core.setFailed('No PR numbers provided');
+              return;
+            }
+            const prs = prInput.split(',').map(s => s.trim()).filter(Boolean);
+            const [owner, repo] = process.env.GITHUB_REPOSITORY.split('/');
+
+            let summaryLines = [];
+            for (const prNumStr of prs) {
+              const prNum = Number(prNumStr);
+              if (!Number.isFinite(prNum)) {
+                summaryLines.push(`PR ${prNumStr}: invalid PR number`);
+                continue;
+              }
+              try {
+                const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: prNum });
+
+                const baseSha = pr.base.sha;
+                const headSha = pr.head.sha;
+                const headRef = pr.head.ref;
+                const headRepoFull = pr.head.repo && pr.head.repo.full_name;
+                const isSameRepo = headRepoFull === `${owner}/${repo}`;
+
+                const { data: compare } = await github.rest.repos.compareCommitsWithBasehead({
+                  owner, repo, basehead: `${baseSha}...${headSha}`,
+                });
+
+                const status = compare.status; // 'identical' | 'ahead' | 'behind' | 'diverged'
+                const filesChanged = (compare.files || []).length;
+                const commits = compare.total_commits;
+
+                let line = `PR #${prNum}: status=${status}, commits=${commits}, files=${filesChanged}`;
+
+                if (status === 'identical' || (commits === 0 && filesChanged === 0)) {
+                  line += ' -> NO DIFF (superseded)';
+                  if (autoClose) {
+                    // Close PR if not already closed
+                    if (pr.state !== 'closed') {
+                      try {
+                        await github.rest.pulls.update({ owner, repo, pull_number: prNum, state: 'closed' });
+                        line += ' (closed)';
+                      } catch (e) {
+                        core.warning(`PR #${prNum}: failed to close - ${e.message}`);
+                      }
+                    }
+                    // Delete branch if same-repo
+                    if (isSameRepo && headRef) {
+                      try {
+                        await github.rest.git.deleteRef({ owner, repo, ref: `heads/${headRef}` });
+                        line += ` and branch '${headRef}' deleted`;
+                      } catch (e) {
+                        core.warning(`PR #${prNum}: failed to delete branch ${headRef} - ${e.message}`);
+                      }
+                    } else {
+                      line += ' (branch not deleted: fork or unknown)';
+                    }
+                  }
+                } else {
+                  line += ' -> DIFFERS (review required)';
+                }
+
+                summaryLines.push(line);
+              } catch (e) {
+                summaryLines.push(`PR #${prNumStr}: ERROR - ${e.message}`);
+                core.warning(`Error processing PR #${prNumStr}: ${e.stack || e}`);
+              }
+            }
+
+            await core.summary
+              .addHeading('PR Diff Sweeper Result')
+              .addList(summaryLines)
+              .write();
