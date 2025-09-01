@@ -1,15 +1,18 @@
-# Ensure Windows-style line endings for C# and solution/project files
-*.cs text eol=crlf
-*.csproj text eol=crlf
-*.sln text eol=crlf
+# Normalize repository text handling
+* text=auto
 
-# Normalize text files; keep default LF for common config formats
+# Force CRLF for C# and VS artifacts
+*.cs   text eol=crlf
+*.csproj text eol=crlf
+*.sln  text eol=crlf
+
+# Common config and docs use LF
 *.json text eol=lf
 *.xml  text eol=lf
 *.yml  text eol=lf
 *.yaml text eol=lf
 *.md   text eol=lf
 
-# Treat these as text for diffing
+# Treat resource/config files as text
 *.resx text
 *.config text
