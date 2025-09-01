@@ -1,0 +1,120 @@
+name: PR diff sweeper
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_numbers:
+        description: "Comma-separated PR numbers (e.g., 12,13,14,20)"
+        required: true
+        type: string
+      auto_close:
+        description: "Auto-close PRs with no diff and delete their branch (same-repo only)"
+        required: false
+        default: "true"
+        type: choice
+        options: ["false", "true"]
+
+permissions:
+  contents: write         # needed to delete branch refs if same-repo
+  pull-requests: write    # needed to close PRs and add comments
+
+concurrency:
+  group: pr-diff-sweeper-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sweep:
+    name: Evaluate and optionally close PRs with no diff
+    runs-on: ubuntu-latest
+    environment: repo-maintenance
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Evaluate PR diffs and close/comment as needed
+        uses: actions/github-script@v7
+        env:
+          PR_NUMBERS: ${{ github.event.inputs.pr_numbers }}
+          AUTO_CLOSE: ${{ github.event.inputs.auto_close }}
+        with:
+          script: |
+            const prInput = (process.env.PR_NUMBERS || '').trim();
+            const autoClose = (process.env.AUTO_CLOSE || 'true') === 'true';
+            if (!prInput) {
+              core.setFailed('No PR numbers provided');
+              return;
+            }
+            const prs = prInput.split(',').map(s => s.trim()).filter(Boolean);
+            const [owner, repo] = process.env.GITHUB_REPOSITORY.split('/');
+
+            let summaryLines = [];
+            for (const prNumStr of prs) {
+              const prNum = Number(prNumStr);
+              try {
+                const pr = await github.rest.pulls.get({ owner, repo, pull_number: prNum });
+                const baseSha = pr.data.base.sha; // base commit SHA
+                const headSha = pr.data.head.sha; // PR head commit SHA
+                const headRef = pr.data.head.ref; // branch name
+                const isSameRepo = pr.data.head.repo && pr.data.head.repo.full_name === `${owner}/${repo}`;
+
+                const compare = await github.rest.repos.compareCommitsWithBasehead({
+                  owner, repo,
+                  basehead: `${baseSha}...${headSha}`,
+                });
+
+                const status = compare.data.status; // 'identical' | 'ahead' | 'behind' | 'diverged'
+                const filesChanged = compare.data.files?.length || 0;
+                const commits = compare.data.total_commits;
+
+                if (status === 'identical' || (commits === 0 && filesChanged === 0)) {
+                  let line = `PR #${prNum}: NO DIFF (superseded).`;
+                  if (autoClose) {
+                    // Add comment explaining closure
+                    const commentBody = [
+                      "This PR was automatically closed by the PR diff sweeper.",
+                      "",
+                      "- Reason: no diff against the base branch (identical contents) — changes are already present on the base branch or were superseded.",
+                      "- Action: if you still need these changes, please rebase onto the latest base and open a new PR.",
+                      "",
+                      "_If this was closed in error, a maintainer can reopen it._"
+                    ].join("\n");
+                    try {
+                      await github.rest.issues.createComment({ owner, repo, issue_number: prNum, body: commentBody });
+                    } catch (e) {
+                      core.warning(`PR #${prNum}: failed to comment: ${e.message}`);
+                    }
+
+                    // Close the PR
+                    try {
+                      await github.rest.pulls.update({ owner, repo, pull_number: prNum, state: 'closed' });
+                      line += ' Closed.';
+                    } catch (e) {
+                      core.warning(`PR #${prNum}: failed to close: ${e.message}`);
+                    }
+
+                    // Delete the branch if it's in this repo
+                    if (isSameRepo && headRef) {
+                      try {
+                        await github.rest.git.deleteRef({ owner, repo, ref: `heads/${headRef}` });
+                        line += ` Branch '${headRef}' deleted.`;
+                      } catch (e) {
+                        core.warning(`PR #${prNum}: failed to delete branch ${headRef}: ${e.message}`);
+                      }
+                    } else {
+                      line += ' Branch not deleted (fork or unknown).';
+                    }
+                  }
+                  summaryLines.push(line);
+                } else {
+                  summaryLines.push(`PR #${prNum}: DIFFERS (review required). commits=${commits}, files=${filesChanged}, status=${status}`);
+                }
+              } catch (e) {
+                core.warning(`Error while processing PR #${prNum}: ${e.stack || e}`);
+                summaryLines.push(`PR #${prNum}: ERROR - ${e.message}`);
+              }
+            }
+
+            await core.summary
+              .addHeading('PR Diff Sweeper Result')
+              .addCodeBlock(summaryLines.join('\n'), 'text')
+              .write();
