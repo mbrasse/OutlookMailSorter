@@ -1,0 +1,79 @@
+name: app-commit
+
+on:
+  workflow_dispatch:
+    inputs:
+      file:
+        description: "Relative path to file to update"
+        required: false
+        default: ".github/healthcheck"
+      content:
+        description: "Line to append"
+        required: false
+        default: "updated by app at $GITHUB_RUN_ID"
+
+permissions:
+  contents: read  # job uses the App installation token for push
+
+jobs:
+  commit:
+    name: Commit to main using GitHub App
+    runs-on: ubuntu-latest
+    env:
+      APP_ID: ${{ secrets.APP_ID }}
+      PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Get installation token
+        id: token
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > get-token.mjs <<'EOF'
+          import { Octokit } from "@octokit/rest";
+          import { createAppAuth } from "@octokit/auth-app";
+          const [owner, repo] = process.env.REPO.split("/");
+          const appOctokit = new Octokit({
+            authStrategy: createAppAuth,
+            auth: {
+              appId: Number(process.env.APP_ID),
+              privateKey: process.env.PRIVATE_KEY.replace(/\\n/g, "\n"),
+            },
+          });
+          const inst = await appOctokit.request("GET /repos/{owner}/{repo}/installation", { owner, repo });
+          const { token } = await appOctokit.auth({ type: "installation", installationId: inst.data.id });
+          console.log(`::add-mask::${token}`);
+          console.log(`token=${token}`);
+          EOF
+          npm init -y >/dev/null 2>&1
+          npm i @octokit/rest @octokit/auth-app >/dev/null 2>&1
+          node get-token.mjs >> "$GITHUB_OUTPUT"
+
+      - name: Configure git as App bot
+        run: |
+          git config user.name "github-app[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin https://x-access-token:${{ steps.token.outputs.token }}@github.com/${{ github.repository }}.git
+
+      - name: Make a change and push to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          file_path="${{ github.event.inputs.file }}"
+          line="${{ github.event.inputs.content }}"
+          mkdir -p "$(dirname "$file_path")"
+          echo "$line" >> "$file_path"
+          git add "$file_path"
+          git commit -m "chore(app): automated update via GitHub App"
+          # Push directly to main (requires App to be allowed to bypass PR requirements in branch protection)
+          git push origin HEAD:main
