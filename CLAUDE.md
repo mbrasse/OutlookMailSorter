@@ -18,7 +18,7 @@ dotnet format whitespace --verify-no-changes --folder . --verbosity minimal
 ```
 
 Run this locally before pushing to avoid the `ci-style` check failing. The `.editorconfig` enforces:
-- C# files: UTF-8, CRLF, 4-space indentation, trimmed trailing whitespace
+- C# files: UTF-8 with BOM (`utf-8-bom`), CRLF, 4-space indentation, trimmed trailing whitespace
 - JSON/YAML/Markdown: LF line endings
 
 ## Architecture
